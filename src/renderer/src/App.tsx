@@ -68,9 +68,14 @@ function App(): React.JSX.Element {
         setProviders(sortedProviders)
         setProviderTypes(typesList)
 
-        // Set default view: first provider if exists, otherwise settings
+        // Create webviews for all providers and set default view
         if (sortedProviders.length > 0) {
-          // Show the first provider directly without calling showProvider function
+          // Ensure webviews are created first
+          for (const provider of sortedProviders) {
+            await window.electron.ipcRenderer.invoke('create-provider-view', provider.id, false)
+          }
+
+          // Then show the first provider
           await window.electron.ipcRenderer.invoke('show-provider-view', sortedProviders[0].id)
           setVisibleProvider(sortedProviders[0].id)
           setCurrentPage('home')
