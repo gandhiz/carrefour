@@ -75,12 +75,12 @@ export function Settings(): React.JSX.Element {
   const loadProviders = async (): Promise<void> => {
     const result = await window.electron.ipcRenderer.invoke('get-providers')
     const providerList = result as Provider[]
-    
+
     // Sort providers by provider type name, then by provider name (same as menu)
     const sortedProviders = providerList.sort((a, b) => {
-      const typeA = providerTypes.find(t => t.id === a.typeId)?.name || a.typeId
-      const typeB = providerTypes.find(t => t.id === b.typeId)?.name || b.typeId
-      
+      const typeA = providerTypes.find((t) => t.id === a.typeId)?.name || a.typeId
+      const typeB = providerTypes.find((t) => t.id === b.typeId)?.name || b.typeId
+
       // First sort by provider type name
       if (typeA !== typeB) {
         return typeA.localeCompare(typeB)
@@ -88,7 +88,7 @@ export function Settings(): React.JSX.Element {
       // Then by provider name
       return a.name.localeCompare(b.name)
     })
-    
+
     setProviders(sortedProviders)
     setLoading(false)
   }
@@ -104,7 +104,7 @@ export function Settings(): React.JSX.Element {
       await loadProviderTypes()
       await loadProviders()
     }
-    
+
     const t = setTimeout(() => {
       void loadData()
     }, 0)
@@ -154,7 +154,7 @@ export function Settings(): React.JSX.Element {
       providerTypeId.trim(),
       providerName.trim()
     )
-    
+
     await loadProviders()
     setOpenDialog(false)
     setLoading(false)
@@ -172,13 +172,15 @@ export function Settings(): React.JSX.Element {
   }
 
   return (
-    <Box sx={{ 
-      width: '100%', 
-      height: '100%', 
-      display: 'flex', 
-      flexDirection: 'column',
-      overflow: 'hidden'
-    }}>
+    <Box
+      sx={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden'
+      }}
+    >
       <Box sx={{ borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         <Tabs value={tabValue} onChange={handleTabChange} aria-label="settings tabs">
           <Tab label="Providers" id="tab-0" aria-controls="tabpanel-0" />

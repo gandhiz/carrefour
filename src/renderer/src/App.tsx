@@ -26,13 +26,13 @@ function App(): React.JSX.Element {
     if (visibleProvider !== null) {
       await window.electron.ipcRenderer.invoke('hide-provider-view', visibleProvider)
     }
-    
+
     // Show the selected provider
     await window.electron.ipcRenderer.invoke('show-provider-view', providerId)
     setVisibleProvider(providerId)
     setCurrentPage('home')
   }
-  
+
   const hideAllProviders = async (): Promise<void> => {
     if (visibleProvider !== null) {
       await window.electron.ipcRenderer.invoke('hide-provider-view', visibleProvider)
@@ -48,15 +48,15 @@ function App(): React.JSX.Element {
           window.electron.ipcRenderer.invoke('get-providers'),
           window.electron.ipcRenderer.invoke('get-provider-types')
         ])
-        
+
         const providerList = providersResult as typeof providers
         const typesList = providerTypesResult as ProviderType[]
-        
+
         // Sort providers by provider type name, then by provider name
         const sortedProviders = providerList.sort((a, b) => {
-          const typeA = typesList.find(t => t.id === a.typeId)?.name || a.typeId
-          const typeB = typesList.find(t => t.id === b.typeId)?.name || b.typeId
-          
+          const typeA = typesList.find((t) => t.id === a.typeId)?.name || a.typeId
+          const typeB = typesList.find((t) => t.id === b.typeId)?.name || b.typeId
+
           // First sort by provider type name
           if (typeA !== typeB) {
             return typeA.localeCompare(typeB)
@@ -64,17 +64,17 @@ function App(): React.JSX.Element {
           // Then by provider name
           return a.name.localeCompare(b.name)
         })
-        
+
         setProviders(sortedProviders)
         setProviderTypes(typesList)
-        
+
         // Set default view: first provider if exists, otherwise settings
         if (sortedProviders.length > 0) {
           await showProvider(sortedProviders[0].id)
         } else {
           setCurrentPage('settings')
         }
-        
+
         // Views are automatically preloaded in the main process
         console.log(`Loaded ${sortedProviders.length} providers - webviews preloaded in background`)
       } catch (error) {
@@ -83,23 +83,23 @@ function App(): React.JSX.Element {
         setCurrentPage('settings')
       }
     }
-    
+
     void autoLoadProviders()
-    
+
     // Handle provider updates
     const providerUpdateHandler = (): void => {
       void autoLoadProviders()
     }
-    
+
     // Handle webview title updates
     const titleUpdateHandler = (_: unknown, title: string): void => {
       console.log('Received title update:', title)
       setWebviewTitle(title)
     }
-    
+
     window.electron.ipcRenderer.on('providers-updated', providerUpdateHandler)
     window.electron.ipcRenderer.on('webview-title-updated', titleUpdateHandler)
-    
+
     return () => {
       window.electron.ipcRenderer.removeListener('providers-updated', providerUpdateHandler)
       window.electron.ipcRenderer.removeListener('webview-title-updated', titleUpdateHandler)
@@ -107,15 +107,17 @@ function App(): React.JSX.Element {
   }, [])
 
   return (
-    <Box sx={{ 
-      display: 'flex', 
-      height: '100vh', 
-      width: '100vw',
-      overflow: 'hidden',
-      position: 'fixed',
-      top: 0,
-      left: 0
-    }}>
+    <Box
+      sx={{
+        display: 'flex',
+        height: '100vh',
+        width: '100vw',
+        overflow: 'hidden',
+        position: 'fixed',
+        top: 0,
+        left: 0
+      }}
+    >
       {/* Left Menu */}
       <Drawer
         variant="permanent"
@@ -179,7 +181,7 @@ function App(): React.JSX.Element {
                       }}
                     />
                   </ListItemIcon>
-                  <ListItemText 
+                  <ListItemText
                     primary={providerType?.name || p.typeId}
                     secondary={p.name}
                     primaryTypographyProps={{ fontSize: '0.9rem' }}
@@ -190,7 +192,7 @@ function App(): React.JSX.Element {
             })
           )}
         </List>
-        
+
         {/* Settings at bottom */}
         <Box>
           <ListItemButton
@@ -255,13 +257,15 @@ function App(): React.JSX.Element {
             </span>
           </Box>
         )}
-        
+
         {currentPage === 'settings' && (
-          <Box sx={{ 
-            flexGrow: 1, 
-            overflow: 'hidden',
-            height: 'calc(100vh - 40px)' 
-          }}>
+          <Box
+            sx={{
+              flexGrow: 1,
+              overflow: 'hidden',
+              height: 'calc(100vh - 40px)'
+            }}
+          >
             <Settings />
           </Box>
         )}
