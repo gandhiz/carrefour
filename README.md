@@ -1,6 +1,6 @@
 # carrefour
 
-An Electron application with React and TypeScript
+A cross-platform chat aggregator desktop application.
 
 ## Recommended IDE Setup
 
