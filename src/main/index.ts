@@ -163,6 +163,10 @@ app.whenReady().then(() => {
         providerName,
         JSON.stringify([])
       )
+      // Notify renderer that providers changed
+      if (mainWindow) {
+        mainWindow.webContents.send('providers-updated')
+      }
       return { success: true }
     } catch (error) {
       console.error('Failed to add provider:', error)
@@ -184,6 +188,10 @@ app.whenReady().then(() => {
         providerType,
         providerName
       )
+      // Notify renderer that providers changed
+      if (mainWindow) {
+        mainWindow.webContents.send('providers-updated')
+      }
       return { success: true }
     } catch (error) {
       console.error('Failed to delete provider:', error)

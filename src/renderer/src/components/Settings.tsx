@@ -58,25 +58,27 @@ export function Settings(): React.JSX.Element {
   const [providerType, setProviderType] = useState('')
   const [providerName, setProviderName] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-
-  // Load providers on mount
-  useEffect(() => {
-    loadProviders()
-  }, [])
+  const [loading, setLoading] = useState(true)
 
   const loadProviders = async (): Promise<void> => {
     try {
-      setLoading(true)
       const result = await window.electron.ipcRenderer.invoke('get-providers')
       setProviders(result as Provider[])
       setError(null)
-    } catch (err) {
-      setError(`Failed to load providers: ${(err as Error).message}`)
+    } catch (e) {
+      setError('Failed to load providers')
     } finally {
       setLoading(false)
     }
   }
+
+  // Load providers on mount
+  useEffect(() => {
+    const t = setTimeout(() => {
+      void loadProviders()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [])
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: number): void => {
     setTabValue(newValue)
@@ -103,26 +105,21 @@ export function Settings(): React.JSX.Element {
       return
     }
 
-    try {
-      setLoading(true)
-      const result = await window.electron.ipcRenderer.invoke(
-        'add-provider',
-        providerType.trim(),
-        providerName.trim()
-      )
+    setLoading(true)
+    const result = await window.electron.ipcRenderer.invoke(
+      'add-provider',
+      providerType.trim(),
+      providerName.trim()
+    )
 
-      if (result.success) {
-        await loadProviders()
-        setOpenDialog(false)
-        setError(null)
-      } else {
-        setError(result.error || 'Failed to add provider')
-      }
-    } catch (err) {
-      setError(`Failed to add provider: ${(err as Error).message}`)
-    } finally {
-      setLoading(false)
+    if (result.success) {
+      await loadProviders()
+      setOpenDialog(false)
+      setError(null)
+    } else {
+      setError(result.error || 'Failed to add provider')
     }
+    setLoading(false)
   }
 
   const handleDeleteProvider = async (type: string, name: string): Promise<void> => {
@@ -130,21 +127,16 @@ export function Settings(): React.JSX.Element {
       return
     }
 
-    try {
-      setLoading(true)
-      const result = await window.electron.ipcRenderer.invoke('delete-provider', type, name)
+    setLoading(true)
+    const result = await window.electron.ipcRenderer.invoke('delete-provider', type, name)
 
-      if (result.success) {
-        await loadProviders()
-        setError(null)
-      } else {
-        setError(result.error || 'Failed to delete provider')
-      }
-    } catch (err) {
-      setError(`Failed to delete provider: ${(err as Error).message}`)
-    } finally {
-      setLoading(false)
+    if (result.success) {
+      await loadProviders()
+      setError(null)
+    } else {
+      setError(result.error || 'Failed to delete provider')
     }
+    setLoading(false)
   }
 
   return (
@@ -189,7 +181,7 @@ export function Settings(): React.JSX.Element {
                 {providers.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={4} align="center" sx={{ py: 3 }}>
-                      No providers found. Click "Add Provider" to create one.
+                      No providers found. Click &quot;Add Provider&quot; to create one.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -234,7 +226,7 @@ export function Settings(): React.JSX.Element {
           <TextField
             fullWidth
             label="Provider Type"
-            placeholder="e.g., facebook, instagram, whatsapp"
+            placeholder="e.g., messenger, google message"
             value={providerType}
             onChange={(e) => setProviderType(e.target.value)}
             margin="normal"
