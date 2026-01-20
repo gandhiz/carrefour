@@ -60,13 +60,12 @@ async function createProviderViewIfNotExists(
 
   const view = new WebContentsView({
     webPreferences: {
-      session: providerSession,
-      devTools: true
+      session: providerSession
     }
   })
   webContentsViews.set(key, view)
   mainWindow.contentView.addChildView(view)
-  view.webContents.openDevTools()
+  //view.webContents.openDevTools()
 
   // Set bounds: left menu is 250px, title bar is 40px, content takes rest
   const bounds = mainWindow.getContentBounds()
