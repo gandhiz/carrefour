@@ -90,19 +90,35 @@ export function Settings(): React.JSX.Element {
     })
 
     setProviders(sortedProviders)
-    setLoading(false)
-  }
-
-  const loadProviderTypes = async (): Promise<void> => {
-    const result = await window.electron.ipcRenderer.invoke('get-provider-types')
-    setProviderTypes(result as ProviderType[])
   }
 
   // Load providers and provider types on mount
   useEffect(() => {
     const loadData = async (): Promise<void> => {
-      await loadProviderTypes()
-      await loadProviders()
+      // First load provider types
+      const providerTypesResult = await window.electron.ipcRenderer.invoke('get-provider-types')
+      const loadedProviderTypes = providerTypesResult as ProviderType[]
+      setProviderTypes(loadedProviderTypes)
+
+      // Then load providers and sort them using the loaded provider types
+      const providersResult = await window.electron.ipcRenderer.invoke('get-providers')
+      const providerList = providersResult as Provider[]
+
+      // Sort providers by provider type name, then by provider name (same as menu)
+      const sortedProviders = providerList.sort((a, b) => {
+        const typeA = loadedProviderTypes.find((t) => t.id === a.typeId)?.name || a.typeId
+        const typeB = loadedProviderTypes.find((t) => t.id === b.typeId)?.name || b.typeId
+
+        // First sort by provider type name
+        if (typeA !== typeB) {
+          return typeA.localeCompare(typeB)
+        }
+        // Then by provider name
+        return a.name.localeCompare(b.name)
+      })
+
+      setProviders(sortedProviders)
+      setLoading(false)
     }
 
     const t = setTimeout(() => {

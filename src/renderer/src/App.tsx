@@ -70,7 +70,10 @@ function App(): React.JSX.Element {
 
         // Set default view: first provider if exists, otherwise settings
         if (sortedProviders.length > 0) {
-          await showProvider(sortedProviders[0].id)
+          // Show the first provider directly without calling showProvider function
+          await window.electron.ipcRenderer.invoke('show-provider-view', sortedProviders[0].id)
+          setVisibleProvider(sortedProviders[0].id)
+          setCurrentPage('home')
         } else {
           setCurrentPage('settings')
         }
@@ -97,12 +100,18 @@ function App(): React.JSX.Element {
       setWebviewTitle(title)
     }
 
-    window.electron.ipcRenderer.on('providers-updated', providerUpdateHandler)
-    window.electron.ipcRenderer.on('webview-title-updated', titleUpdateHandler)
+    const removeListenerProvidersUpdated = window.electron.ipcRenderer.on(
+      'providers-updated',
+      providerUpdateHandler
+    )
+    const removeListenerWebviewTitleUpdated = window.electron.ipcRenderer.on(
+      'webview-title-updated',
+      titleUpdateHandler
+    )
 
     return () => {
-      window.electron.ipcRenderer.removeListener('providers-updated', providerUpdateHandler)
-      window.electron.ipcRenderer.removeListener('webview-title-updated', titleUpdateHandler)
+      removeListenerProvidersUpdated()
+      removeListenerWebviewTitleUpdated()
     }
   }, [])
 
