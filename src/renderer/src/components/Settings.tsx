@@ -74,7 +74,22 @@ export function Settings(): React.JSX.Element {
 
   const loadProviders = async (): Promise<void> => {
     const result = await window.electron.ipcRenderer.invoke('get-providers')
-    setProviders(result as Provider[])
+    const providerList = result as Provider[]
+    
+    // Sort providers by provider type name, then by provider name (same as menu)
+    const sortedProviders = providerList.sort((a, b) => {
+      const typeA = providerTypes.find(t => t.id === a.typeId)?.name || a.typeId
+      const typeB = providerTypes.find(t => t.id === b.typeId)?.name || b.typeId
+      
+      // First sort by provider type name
+      if (typeA !== typeB) {
+        return typeA.localeCompare(typeB)
+      }
+      // Then by provider name
+      return a.name.localeCompare(b.name)
+    })
+    
+    setProviders(sortedProviders)
     setLoading(false)
   }
 
@@ -85,9 +100,13 @@ export function Settings(): React.JSX.Element {
 
   // Load providers and provider types on mount
   useEffect(() => {
+    const loadData = async (): Promise<void> => {
+      await loadProviderTypes()
+      await loadProviders()
+    }
+    
     const t = setTimeout(() => {
-      void loadProviders()
-      void loadProviderTypes()
+      void loadData()
     }, 0)
     return () => clearTimeout(t)
   }, [])
@@ -153,14 +172,20 @@ export function Settings(): React.JSX.Element {
   }
 
   return (
-    <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+    <Box sx={{ 
+      width: '100%', 
+      height: '100%', 
+      display: 'flex', 
+      flexDirection: 'column',
+      overflow: 'hidden'
+    }}>
+      <Box sx={{ borderBottom: 1, borderColor: 'divider', flexShrink: 0 }}>
         <Tabs value={tabValue} onChange={handleTabChange} aria-label="settings tabs">
           <Tab label="Providers" id="tab-0" aria-controls="tabpanel-0" />
         </Tabs>
       </Box>
 
-      <Box sx={{ flex: 1, overflow: 'auto' }}>
+      <Box sx={{ flex: 1, overflow: 'hidden' }}>
         <TabPanel value={tabValue} index={0}>
           <Box sx={{ mb: 2 }}>
             <Button

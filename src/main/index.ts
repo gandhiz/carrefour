@@ -44,7 +44,100 @@ class ProviderType {
 
 let mainWindow: BrowserWindow
 const webContentsViews: Map<string, WebContentsView> = new Map()
+const webviewTitles: Map<string, string> = new Map()
+let currentVisibleProvider: string | null = null
 let db: Database.Database
+
+// Preload all provider webviews in background
+async function preloadAllProviderViews(): Promise<void> {
+  try {
+    const providers = db.prepare('SELECT * FROM providers').all() as Array<{ id: number; typeId: string; name: string }>
+    
+    for (const provider of providers) {
+      await createProviderViewIfNotExists(provider.id, false) // Create hidden
+    }
+    
+    console.log(`Preloaded ${providers.length} provider webviews in background`)
+  } catch (error) {
+    console.error('Failed to preload provider webviews:', error)
+  }
+}
+
+// Create provider view if it doesn't exist (extracted from IPC handler)
+async function createProviderViewIfNotExists(providerId: number, visible: boolean = false): Promise<void> {
+  const key = providerId.toString()
+  if (webContentsViews.has(key)) {
+    return // Already exists, don't recreate
+  }
+  
+  // Get provider details from database
+  const provider = db.prepare('SELECT typeId FROM providers WHERE id = ?').get(providerId)
+  if (!provider) {
+    console.error('Provider not found:', providerId)
+    return
+  }
+  
+  // Get provider type and URL
+  const providerType = ProviderType.getById(provider.typeId)
+  if (!providerType) {
+    console.error('Provider type not found:', provider.typeId)
+    return
+  }
+  
+  const url = providerType.url
+  
+  // Create a separate session for this provider
+  const providerSession = session.fromPartition(`persist:provider-${providerId}`)
+  
+  const view = new WebContentsView({
+    webPreferences: {
+      session: providerSession
+    }
+  })
+  webContentsViews.set(key, view)
+  mainWindow.contentView.addChildView(view)
+
+  // Set bounds: left menu is 250px, title bar is 40px, content takes rest
+  const bounds = mainWindow.getContentBounds()
+  const titleHeight = 40
+  view.setBounds({
+    x: 250,
+    y: titleHeight,
+    width: bounds.width - 250,
+    height: bounds.height - titleHeight
+  })
+
+  // Listen for title changes and update the stored title
+  view.webContents.on('page-title-updated', (event, title) => {
+    console.log(`Title updated for provider ${key}: ${title}`)
+    webviewTitles.set(key, title)
+    // If this is the currently visible provider, update the renderer immediately
+    if (currentVisibleProvider === key) {
+      console.log(`Sending title update to renderer: ${title}`)
+      mainWindow.webContents.send('webview-title-updated', title)
+    }
+  })
+
+  // Load URL with custom user agent for better compatibility
+  if (providerType.id === 'WhatsApp') {
+    // WhatsApp Web requires a recent Chrome user agent
+    const chromeUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    view.webContents.setUserAgent(chromeUserAgent)
+  }
+  
+  // Start loading in background
+  view.webContents.loadURL(url)
+  
+  // Set default zoom to 80% after page loads
+  view.webContents.once('did-finish-load', () => {
+    view.webContents.setZoomFactor(0.9)
+  })
+  
+  // Set initial visibility
+  view.setVisible(visible)
+  
+  console.log(`Created webview for provider ${providerId} (${providerType.name})`)
+}
 
 // Initialize SQLite database
 function initDatabase(): void {
@@ -68,12 +161,13 @@ function updateAllViewsBounds(): void {
   if (!mainWindow) return
   
   const bounds = mainWindow.getContentBounds()
+  const titleHeight = 40
   webContentsViews.forEach((view) => {
     view.setBounds({
       x: 250, // Left menu width
-      y: 0,
+      y: titleHeight,
       width: bounds.width - 250,
-      height: bounds.height
+      height: bounds.height - titleHeight
     })
   })
 }
@@ -81,7 +175,7 @@ function updateAllViewsBounds(): void {
 function createWindow(): void {
   // Create the browser window.
   mainWindow = new BrowserWindow({
-    width: 900,
+    width: 1200,
     height: 670,
     show: false,
     autoHideMenuBar: true,
@@ -140,59 +234,22 @@ app.whenReady().then(() => {
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
 
-  // IPC handler for creating WebContentsView for a provider
+  // IPC handler for creating WebContentsView for a provider (now just ensures it exists)
   ipcMain.handle('create-provider-view', async (_, providerId: number, visible: boolean = true) => {
-    const key = providerId.toString()
-    if (!webContentsViews.has(key)) {
-      // Get provider details from database
-      const provider = db.prepare('SELECT typeId FROM providers WHERE id = ?').get(providerId)
-      if (!provider) {
-        console.error('Provider not found:', providerId)
-        return
-      }
-      
-      // Get provider type and URL
-      const providerType = ProviderType.getById(provider.typeId)
-      if (!providerType) {
-        console.error('Provider type not found:', provider.typeId)
-        return
-      }
-      
-      const url = providerType.url
-      
-      // Create a separate session for this provider
-      const providerSession = session.fromPartition(`persist:provider-${providerId}`)
-      
-      const view = new WebContentsView({
-        webPreferences: {
-          session: providerSession
-        }
-      })
-      webContentsViews.set(key, view)
-      mainWindow.contentView.addChildView(view)
-
-      // Set bounds: left menu is 250px, content takes rest of the space
-      const bounds = mainWindow.getContentBounds()
-      view.setBounds({
-        x: 250,
-        y: 0,
-        width: bounds.width - 250,
-        height: bounds.height
-      })
-
-      // Load URL - session will be automatically restored by the partition
-      view.webContents.loadURL(url)
-      
-      // Set initial visibility
-      view.setVisible(visible)
-    }
+    await createProviderViewIfNotExists(providerId, visible)
   })
 
   // IPC handler for showing a provider view
   ipcMain.handle('show-provider-view', (_, providerId: number) => {
-    const view = webContentsViews.get(providerId.toString())
+    const key = providerId.toString()
+    const view = webContentsViews.get(key)
     if (view) {
       view.setVisible(true)
+      currentVisibleProvider = key
+      // Send current title to renderer
+      const currentTitle = webviewTitles.get(key) || 'Loading...'
+      console.log(`Showing provider ${key}, sending title: ${currentTitle}`)
+      mainWindow.webContents.send('webview-title-updated', currentTitle)
     }
   })
 
@@ -201,6 +258,11 @@ app.whenReady().then(() => {
     const view = webContentsViews.get(providerId.toString())
     if (view) {
       view.setVisible(false)
+      if (currentVisibleProvider === providerId.toString()) {
+        currentVisibleProvider = null
+        // Clear title when hiding current provider
+        mainWindow.webContents.send('webview-title-updated', '')
+      }
     }
   })
 
@@ -221,12 +283,17 @@ app.whenReady().then(() => {
   })
 
   // IPC handler for adding a provider
-  ipcMain.handle('add-provider', (_, providerTypeId: string, providerName: string) => {
+  ipcMain.handle('add-provider', async (_, providerTypeId: string, providerName: string) => {
     try {
-      db.prepare('INSERT INTO providers (typeId, name) VALUES (?, ?)').run(
+      const result = db.prepare('INSERT INTO providers (typeId, name) VALUES (?, ?)').run(
         providerTypeId,
         providerName
       )
+      
+      // Auto-create webview for the new provider in background
+      const newProviderId = result.lastInsertRowid as number
+      await createProviderViewIfNotExists(newProviderId, false)
+      
       // Notify renderer that providers changed
       if (mainWindow) {
         mainWindow.webContents.send('providers-updated')
@@ -243,8 +310,9 @@ app.whenReady().then(() => {
     try {
       const view = webContentsViews.get(providerId.toString())
       if (view) {
-        mainWindow.contentView.removeChildView(view)
-        webContentsViews.delete(providerId.toString())
+        // Hide the view but keep it alive for faster future access
+        view.setVisible(false)
+        // Note: We don't remove the view from webContentsViews to keep it alive
       }
 
       db.prepare('DELETE FROM providers WHERE id = ?').run(providerId)
@@ -260,6 +328,11 @@ app.whenReady().then(() => {
   })
 
   createWindow()
+  
+  // Preload all provider webviews in background after window is ready
+  setTimeout(() => {
+    void preloadAllProviderViews()
+  }, 1000) // Small delay to ensure window is fully loaded
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
