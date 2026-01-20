@@ -3,43 +3,12 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../renderer/public/icon.png?asset'
 import Database from 'better-sqlite3'
-
-class ProviderType {
-  constructor(
-    public id: string,
-    public name: string,
-    public url: string,
-    public icon: string
-  ) {}
-
-  static readonly types: ProviderType[] = [
-    new ProviderType(
-      'FacebookMessenger',
-      'Facebook Messenger',
-      'https://www.messenger.com',
-      'messenger-icon.png'
-    ),
-    new ProviderType(
-      'GoogleMessages',
-      'Google Messages',
-      'https://messages.google.com/web/conversations',
-      'google-messages-icon.png'
-    ),
-    new ProviderType('WhatsApp', 'WhatsApp', 'https://web.whatsapp.com', 'whatsapp-icon.png')
-  ]
-
-  static getById(id: string): ProviderType | undefined {
-    return this.types.find((type) => type.id === id)
-  }
-
-  static getAll(): ProviderType[] {
-    return [...this.types]
-  }
-}
+import { ProviderType } from './ProviderType'
 
 let mainWindow: BrowserWindow
 const webContentsViews: Map<string, WebContentsView> = new Map()
 const webviewTitles: Map<string, string> = new Map()
+const unreadFlags: Map<string, boolean> = new Map()
 let currentVisibleProvider: string | null = null
 let db: Database.Database
 
@@ -55,8 +24,6 @@ async function preloadAllProviderViews(): Promise<void> {
     for (const provider of providers) {
       await createProviderViewIfNotExists(provider.id, false) // Create hidden
     }
-
-    console.log(`Preloaded ${providers.length} provider webviews in background`)
   } catch (error) {
     console.error('Failed to preload provider webviews:', error)
   }
@@ -93,11 +60,13 @@ async function createProviderViewIfNotExists(
 
   const view = new WebContentsView({
     webPreferences: {
-      session: providerSession
+      session: providerSession,
+      devTools: true
     }
   })
   webContentsViews.set(key, view)
   mainWindow.contentView.addChildView(view)
+  view.webContents.openDevTools()
 
   // Set bounds: left menu is 250px, title bar is 40px, content takes rest
   const bounds = mainWindow.getContentBounds()
@@ -111,21 +80,17 @@ async function createProviderViewIfNotExists(
 
   // Listen for title changes and update the stored title
   view.webContents.on('page-title-updated', (_event, title) => {
-    console.log(`Title updated for provider ${key}: ${title}`)
     webviewTitles.set(key, title)
+
     // If this is the currently visible provider, update the renderer immediately
     if (currentVisibleProvider === key) {
-      console.log(`Sending title update to renderer: ${title}`)
       mainWindow.webContents.send('webview-title-updated', title)
     }
   })
 
   // Load URL with custom user agent for better compatibility
-  if (providerType.id === 'WhatsApp') {
-    // WhatsApp Web requires a recent Chrome user agent
-    const chromeUserAgent =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-    view.webContents.setUserAgent(chromeUserAgent)
+  if (providerType.userAgent) {
+    view.webContents.setUserAgent(providerType.userAgent)
   }
 
   // Start loading in background
@@ -135,42 +100,68 @@ async function createProviderViewIfNotExists(
   view.webContents.once('did-finish-load', () => {
     view.webContents.setZoomFactor(0.9)
 
-    // Auto-click "Keep me signed in" for Messenger
-    if (providerType.id === 'FacebookMessenger') {
-      // Small delay to let page fully render
+    // Inject provider-specific script if available
+    if (providerType.script) {
       setTimeout(() => {
         view.webContents
-          .executeJavaScript(
-            `
-          // Target the specific Messenger "Keep me signed in" structure
-          try {
-            const persistentCheckbox = document.querySelector('input[name="persistent"][type="checkbox"]');
-            if (persistentCheckbox && !persistentCheckbox.checked) {
-              persistentCheckbox.click();
-              console.log('Auto-clicked Keep me signed in checkbox (persistent)');
-            }
-          } catch (e) {
-            console.log('Error auto-clicking Keep me signed in:', e);
-          }
-        `
-          )
-          .catch(() => {
-            // Ignore JavaScript execution errors
+          .executeJavaScript(providerType.script)
+          .then(() => {
+            // Script injection completed
           })
-      }, 2000) // 2 second delay to ensure page is fully loaded
+          .catch((error) => {
+            console.error('Error injecting script for provider', providerId, error)
+          })
+      }, 2000)
     }
   })
 
   // Set initial visibility
   view.setVisible(visible)
+}
 
-  console.log(`Created webview for provider ${providerId} (${providerType.name})`)
+// Worker system to check unread status every second
+function startUnreadStatusWorker(): void {
+  setInterval(async () => {
+    for (const [key, view] of webContentsViews) {
+      if (view && view.webContents) {
+        try {
+          // Execute getUnreadFlag in the webview context
+          const hasUnread = (await view.webContents.executeJavaScript(`
+            (function() {
+              try {
+                if (typeof getUnreadFlag === 'function') {
+                  return getUnreadFlag();
+                }
+                return false;
+              } catch (e) {
+                return false;
+              }
+            })()
+          `)) as boolean
+
+          const oldStatus = unreadFlags.get(key) || false
+
+          if (hasUnread !== oldStatus) {
+            unreadFlags.set(key, hasUnread)
+
+            // Notify renderer about status changes
+            if (mainWindow) {
+              mainWindow.webContents.send('unread-counts-updated', {
+                [key]: hasUnread ? 1 : 0
+              })
+            }
+          }
+        } catch {
+          // Silently ignore errors for providers that aren't loaded yet
+        }
+      }
+    }
+  }, 1000) // Check every second
 }
 
 // Initialize SQLite database
 function initDatabase(): void {
   const dbPath = join(app.getPath('userData'), 'settings6.db')
-  console.log('Database path:', dbPath)
   db = new Database(dbPath)
 
   db.exec(`
@@ -217,6 +208,7 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+    mainWindow.maximize()
     mainWindow.setTitle('Carrefour')
   })
 
@@ -259,9 +251,6 @@ app.whenReady().then(() => {
   // Initialize database
   initDatabase()
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
-
   // IPC handler for creating WebContentsView for a provider (now just ensures it exists)
   ipcMain.handle('create-provider-view', async (_, providerId: number, visible: boolean = true) => {
     await createProviderViewIfNotExists(providerId, visible)
@@ -276,7 +265,6 @@ app.whenReady().then(() => {
       currentVisibleProvider = key
       // Send current title to renderer
       const currentTitle = webviewTitles.get(key) || 'Loading...'
-      console.log(`Showing provider ${key}, sending title: ${currentTitle}`)
       mainWindow.webContents.send('webview-title-updated', currentTitle)
     }
   })
@@ -308,6 +296,15 @@ app.whenReady().then(() => {
   // IPC handler for getting provider types
   ipcMain.handle('get-provider-types', () => {
     return ProviderType.getAll()
+  })
+
+  // IPC handler for getting unread flags
+  ipcMain.handle('get-unread-counts', () => {
+    const counts: { [key: string]: number } = {}
+    unreadFlags.forEach((hasUnread, providerId) => {
+      counts[providerId] = hasUnread ? 1 : 0
+    })
+    return counts
   })
 
   // IPC handler for adding a provider
@@ -360,6 +357,11 @@ app.whenReady().then(() => {
   setTimeout(() => {
     void preloadAllProviderViews()
   }, 1000) // Small delay to ensure window is fully loaded
+
+  // Start the unread status worker after views are preloaded
+  setTimeout(() => {
+    startUnreadStatusWorker()
+  }, 5000) // Increased delay to ensure scripts are injected
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

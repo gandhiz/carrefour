@@ -1,5 +1,6 @@
 import { Box, Drawer, List, ListItemIcon, ListItemText, ListItemButton } from '@mui/material'
 import SettingsIcon from '@mui/icons-material/Settings'
+import MailIcon from '@mui/icons-material/Mail'
 import { useState, useEffect } from 'react'
 import { Settings } from './components/Settings'
 
@@ -20,6 +21,7 @@ function App(): React.JSX.Element {
   const [providerTypes, setProviderTypes] = useState<ProviderType[]>([])
   const [visibleProvider, setVisibleProvider] = useState<number | null>(null)
   const [webviewTitle, setWebviewTitle] = useState<string>('')
+  const [unreadCounts, setUnreadCounts] = useState<{ [key: string]: number }>({})
 
   const showProvider = async (providerId: number): Promise<void> => {
     // Hide current provider if any
@@ -75,6 +77,11 @@ function App(): React.JSX.Element {
             await window.electron.ipcRenderer.invoke('create-provider-view', provider.id, false)
           }
 
+          // Load initial unread counts
+          const initialCounts = await window.electron.ipcRenderer.invoke('get-unread-counts')
+          console.log('Initial unread counts:', initialCounts)
+          setUnreadCounts(initialCounts)
+
           // Then show the first provider
           await window.electron.ipcRenderer.invoke('show-provider-view', sortedProviders[0].id)
           setVisibleProvider(sortedProviders[0].id)
@@ -105,6 +112,12 @@ function App(): React.JSX.Element {
       setWebviewTitle(title)
     }
 
+    // Handle unread count updates
+    const unreadCountsUpdateHandler = (_: unknown, counts: { [key: string]: number }): void => {
+      console.log('Received unread counts update:', counts)
+      setUnreadCounts((prev) => ({ ...prev, ...counts }))
+    }
+
     const removeListenerProvidersUpdated = window.electron.ipcRenderer.on(
       'providers-updated',
       providerUpdateHandler
@@ -113,10 +126,15 @@ function App(): React.JSX.Element {
       'webview-title-updated',
       titleUpdateHandler
     )
+    const removeListenerUnreadCountsUpdated = window.electron.ipcRenderer.on(
+      'unread-counts-updated',
+      unreadCountsUpdateHandler
+    )
 
     return () => {
       removeListenerProvidersUpdated()
       removeListenerWebviewTitleUpdated()
+      removeListenerUnreadCountsUpdated()
     }
   }, [])
 
@@ -162,6 +180,7 @@ function App(): React.JSX.Element {
             providers.map((p) => {
               const providerType = providerTypes.find((pt) => pt.id === p.typeId)
               const isSelected = visibleProvider === p.id
+              const unreadCount = unreadCounts[p.id.toString()] || 0
               return (
                 <ListItemButton
                   key={p.id}
@@ -201,6 +220,18 @@ function App(): React.JSX.Element {
                     primaryTypographyProps={{ fontSize: '0.9rem' }}
                     secondaryTypographyProps={{ fontSize: '0.8rem' }}
                   />
+                  {unreadCount > 0 && (
+                    <Box
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginLeft: 1
+                      }}
+                    >
+                      <MailIcon sx={{ fontSize: '18px', color: 'text.secondary' }} />
+                    </Box>
+                  )}
                 </ListItemButton>
               )
             })
