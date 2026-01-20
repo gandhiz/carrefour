@@ -131,9 +131,34 @@ async function createProviderViewIfNotExists(
   // Start loading in background
   view.webContents.loadURL(url)
 
-  // Set default zoom to 80% after page loads
+  // Set default zoom and handle auto-interactions after page loads
   view.webContents.once('did-finish-load', () => {
     view.webContents.setZoomFactor(0.9)
+
+    // Auto-click "Keep me signed in" for Messenger
+    if (providerType.id === 'FacebookMessenger') {
+      // Small delay to let page fully render
+      setTimeout(() => {
+        view.webContents
+          .executeJavaScript(
+            `
+          // Target the specific Messenger "Keep me signed in" structure
+          try {
+            const persistentCheckbox = document.querySelector('input[name="persistent"][type="checkbox"]');
+            if (persistentCheckbox && !persistentCheckbox.checked) {
+              persistentCheckbox.click();
+              console.log('Auto-clicked Keep me signed in checkbox (persistent)');
+            }
+          } catch (e) {
+            console.log('Error auto-clicking Keep me signed in:', e);
+          }
+        `
+          )
+          .catch(() => {
+            // Ignore JavaScript execution errors
+          })
+      }, 2000) // 2 second delay to ensure page is fully loaded
+    }
   })
 
   // Set initial visibility
