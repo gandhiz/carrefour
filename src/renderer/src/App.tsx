@@ -1,68 +1,79 @@
-import {
-  Box,
-  Drawer,
-  List,
-  ListItemIcon,
-  ListItemText,
-  ListItemButton,
-  CircularProgress
-} from '@mui/material'
+import { Box, Drawer, List, ListItemIcon, ListItemText, ListItemButton } from '@mui/material'
 import HomeIcon from '@mui/icons-material/Home'
 import SettingsIcon from '@mui/icons-material/Settings'
-import ExpandLessIcon from '@mui/icons-material/ExpandLess'
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import { useState, useEffect } from 'react'
 import { Settings } from './components/Settings'
 
 const DRAWER_WIDTH = 250
 
+interface ProviderType {
+  id: string
+  name: string
+  url: string
+  icon: string
+}
+
 function App(): React.JSX.Element {
   const [currentPage, setCurrentPage] = useState<'home' | 'settings'>('home')
-  const [showProviders, setShowProviders] = useState(false)
   const [providers, setProviders] = useState<
-    Array<{ id: number; type: string; name: string; created_at: string }>
+    Array<{ id: number; typeId: string; name: string; created_at: string }>
   >([])
-  const [providersLoading, setProvidersLoading] = useState(false)
+  const [providerTypes, setProviderTypes] = useState<ProviderType[]>([])
+  const [visibleProvider, setVisibleProvider] = useState<number | null>(null)
 
   useEffect(() => {
-    // Refresh list when providers change and the menu is expanded
+    // Auto-load providers and provider types
+    const autoLoadProviders = async (): Promise<void> => {
+      try {
+        const [providersResult, providerTypesResult] = await Promise.all([
+          window.electron.ipcRenderer.invoke('get-providers'),
+          window.electron.ipcRenderer.invoke('get-provider-types')
+        ])
+        
+        const providerList = providersResult as typeof providers
+        const typesList = providerTypesResult as ProviderType[]
+        
+        setProviders(providerList)
+        setProviderTypes(typesList)
+        
+        // Create all provider views in background (hidden)
+        for (const provider of providerList) {
+          await window.electron.ipcRenderer.invoke('create-provider-view', provider.id, false)
+        }
+      } catch (error) {
+        console.error('Failed to auto-load providers:', error)
+      }
+    }
+    
+    void autoLoadProviders()
+    
+    // Handle provider updates
     const handler = (): void => {
-      if (showProviders) void refreshProviders()
+      void autoLoadProviders()
     }
     window.electron.ipcRenderer.on('providers-updated', handler)
     return () => {
       window.electron.ipcRenderer.removeListener('providers-updated', handler)
     }
-  }, [showProviders])
+  }, [])
 
-  const toggleProviders = async (): Promise<void> => {
-    const next = !showProviders
-    setShowProviders(next)
-    if (next) {
-      setProvidersLoading(true)
-      try {
-        const result = await window.electron.ipcRenderer.invoke('get-providers')
-        setProviders(result as typeof providers)
-      } finally {
-        setProvidersLoading(false)
-      }
+  const showProvider = async (providerId: number): Promise<void> => {
+    // Hide current provider if any
+    if (visibleProvider !== null) {
+      await window.electron.ipcRenderer.invoke('hide-provider-view', visibleProvider)
     }
-  }
-
-  const refreshProviders = async (): Promise<void> => {
-    if (!showProviders) return
-    setProvidersLoading(true)
-    try {
-      const result = await window.electron.ipcRenderer.invoke('get-providers')
-      setProviders(result as typeof providers)
-    } finally {
-      setProvidersLoading(false)
-    }
-  }
-
-  const openProvider = async (type: string, name: string): Promise<void> => {
-    await window.electron.ipcRenderer.invoke('create-provider-view', type, name)
+    
+    // Show the selected provider
+    await window.electron.ipcRenderer.invoke('show-provider-view', providerId)
+    setVisibleProvider(providerId)
     setCurrentPage('home')
+  }
+  
+  const hideAllProviders = async (): Promise<void> => {
+    if (visibleProvider !== null) {
+      await window.electron.ipcRenderer.invoke('hide-provider-view', visibleProvider)
+      setVisibleProvider(null)
+    }
   }
 
   return (
@@ -81,10 +92,16 @@ function App(): React.JSX.Element {
       >
         <List sx={{ pt: 2 }}>
           <ListItemButton
-            selected={currentPage === 'home'}
-            onClick={() => setCurrentPage('home')}
+            selected={currentPage === 'home' && visibleProvider === null}
+            onClick={() => {
+              void hideAllProviders()
+              setCurrentPage('home')
+            }}
             sx={{
-              backgroundColor: currentPage === 'home' ? 'rgba(0, 0, 0, 0.04)' : 'transparent',
+              backgroundColor:
+                currentPage === 'home' && visibleProvider === null
+                  ? 'rgba(0, 0, 0, 0.04)'
+                  : 'transparent',
               '&:hover': {
                 backgroundColor: 'rgba(0, 0, 0, 0.08)'
               }
@@ -96,62 +113,53 @@ function App(): React.JSX.Element {
             <ListItemText primary="Home" />
           </ListItemButton>
 
-          {/* Providers Toggle */}
-          <ListItemButton
-            onClick={() => void toggleProviders()}
-            sx={{
-              '&:hover': {
-                backgroundColor: 'rgba(0, 0, 0, 0.08)'
-              }
-            }}
-          >
-            <ListItemIcon>{showProviders ? <ExpandLessIcon /> : <ExpandMoreIcon />}</ListItemIcon>
-            <ListItemText primary="Providers" />
-          </ListItemButton>
-          {showProviders && providersLoading && (
-            <ListItemButton disabled sx={{ pl: 4 }}>
-              <ListItemIcon>
-                <CircularProgress size={20} />
-              </ListItemIcon>
-              <ListItemText primary="Loading providers…" />
-            </ListItemButton>
-          )}
-          {showProviders && !providersLoading && providers.length === 0 && (
-            <>
-              <ListItemButton disabled sx={{ pl: 4 }}>
-                <ListItemText primary="No providers yet" />
-              </ListItemButton>
-              <ListItemButton onClick={() => setCurrentPage('settings')} sx={{ pl: 4 }}>
-                <ListItemIcon>
-                  <SettingsIcon />
-                </ListItemIcon>
-                <ListItemText primary="Open Settings to add…" />
-              </ListItemButton>
-            </>
-          )}
-          {showProviders &&
-            !providersLoading &&
-            providers.map((p) => (
+          {/* Providers at main level */}
+          {providers.map((p) => {
+            const providerType = providerTypes.find((pt) => pt.id === p.typeId)
+            const isSelected = visibleProvider === p.id
+            return (
               <ListItemButton
-                key={`${p.type}:${p.name}`}
-                onClick={() => void openProvider(p.type, p.name)}
-                sx={{ pl: 4, '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.06)' } }}
+                key={p.id}
+                selected={isSelected}
+                onClick={() => void showProvider(p.id)}
+                sx={{
+                  backgroundColor: isSelected ? 'rgba(0, 0, 0, 0.04)' : 'transparent',
+                  '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.08)' }
+                }}
               >
-                <ListItemText primary={`${p.type} • ${p.name}`} />
+                <ListItemIcon>
+                  {providerType?.icon ? (
+                    <img
+                      src={providerType.icon}
+                      alt={providerType.name}
+                      style={{ width: 24, height: 24 }}
+                      onError={(e) => {
+                        // Hide image and show fallback on error
+                        e.currentTarget.style.display = 'none'
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    style={{
+                      width: 24,
+                      height: 24,
+                      backgroundColor: '#ccc',
+                      borderRadius: '50%',
+                      display: providerType?.icon ? 'none' : 'block'
+                    }}
+                  />
+                </ListItemIcon>
+                <ListItemText primary={`${providerType?.name || p.typeId} • ${p.name}`} />
               </ListItemButton>
-            ))}
-          {showProviders && (
-            <ListItemButton
-              onClick={() => void refreshProviders()}
-              sx={{ pl: 4 }}
-              disabled={providersLoading}
-            >
-              <ListItemText primary="Refresh Providers" />
-            </ListItemButton>
-          )}
+            )
+          })}
+          
           <ListItemButton
             selected={currentPage === 'settings'}
-            onClick={() => setCurrentPage('settings')}
+            onClick={() => {
+              void hideAllProviders()
+              setCurrentPage('settings')
+            }}
             sx={{
               backgroundColor: currentPage === 'settings' ? 'rgba(0, 0, 0, 0.04)' : 'transparent',
               '&:hover': {

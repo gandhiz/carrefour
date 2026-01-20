@@ -16,7 +16,10 @@ import {
   TableRow,
   Paper,
   IconButton,
-  Alert
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem
 } from '@mui/material'
 import DeleteIcon from '@mui/icons-material/Delete'
 import AddIcon from '@mui/icons-material/Add'
@@ -46,36 +49,45 @@ function TabPanel(props: TabPanelProps): React.JSX.Element {
 
 interface Provider {
   id: number
-  type: string
+  typeId: string
   name: string
   created_at: string
+}
+
+interface ProviderType {
+  id: string
+  name: string
+  url: string
+  icon: string
 }
 
 export function Settings(): React.JSX.Element {
   const [tabValue, setTabValue] = useState(0)
   const [providers, setProviders] = useState<Provider[]>([])
+  const [providerTypes, setProviderTypes] = useState<ProviderType[]>([])
   const [openDialog, setOpenDialog] = useState(false)
-  const [providerType, setProviderType] = useState('')
+  const [providerTypeId, setProviderTypeId] = useState('')
   const [providerName, setProviderName] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [providerTypeError, setProviderTypeError] = useState(false)
+  const [providerNameError, setProviderNameError] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const loadProviders = async (): Promise<void> => {
-    try {
-      const result = await window.electron.ipcRenderer.invoke('get-providers')
-      setProviders(result as Provider[])
-      setError(null)
-    } catch (e) {
-      setError('Failed to load providers')
-    } finally {
-      setLoading(false)
-    }
+    const result = await window.electron.ipcRenderer.invoke('get-providers')
+    setProviders(result as Provider[])
+    setLoading(false)
   }
 
-  // Load providers on mount
+  const loadProviderTypes = async (): Promise<void> => {
+    const result = await window.electron.ipcRenderer.invoke('get-provider-types')
+    setProviderTypes(result as ProviderType[])
+  }
+
+  // Load providers and provider types on mount
   useEffect(() => {
     const t = setTimeout(() => {
       void loadProviders()
+      void loadProviderTypes()
     }, 0)
     return () => clearTimeout(t)
   }, [])
@@ -85,9 +97,10 @@ export function Settings(): React.JSX.Element {
   }
 
   const handleAddClick = (): void => {
-    setProviderType('')
+    setProviderTypeId('')
     setProviderName('')
-    setError(null)
+    setProviderTypeError(false)
+    setProviderNameError(false)
     setOpenDialog(true)
   }
 
@@ -96,46 +109,46 @@ export function Settings(): React.JSX.Element {
   }
 
   const handleSaveProvider = async (): Promise<void> => {
-    if (!providerType.trim()) {
-      setError('Provider type is required')
-      return
+    // Reset errors
+    setProviderTypeError(false)
+    setProviderNameError(false)
+
+    // Validate fields
+    const isTypeValid = providerTypeId.trim() !== ''
+    const isNameValid = providerName.trim() !== ''
+
+    if (!isTypeValid) {
+      setProviderTypeError(true)
     }
-    if (!providerName.trim()) {
-      setError('Provider name is required')
+    if (!isNameValid) {
+      setProviderNameError(true)
+    }
+
+    // Don't submit if invalid
+    if (!isTypeValid || !isNameValid) {
       return
     }
 
     setLoading(true)
-    const result = await window.electron.ipcRenderer.invoke(
+    await window.electron.ipcRenderer.invoke(
       'add-provider',
-      providerType.trim(),
+      providerTypeId.trim(),
       providerName.trim()
     )
-
-    if (result.success) {
-      await loadProviders()
-      setOpenDialog(false)
-      setError(null)
-    } else {
-      setError(result.error || 'Failed to add provider')
-    }
+    
+    await loadProviders()
+    setOpenDialog(false)
     setLoading(false)
   }
 
-  const handleDeleteProvider = async (type: string, name: string): Promise<void> => {
+  const handleDeleteProvider = async (providerId: number, name: string): Promise<void> => {
     if (!confirm(`Are you sure you want to delete "${name}"?`)) {
       return
     }
 
     setLoading(true)
-    const result = await window.electron.ipcRenderer.invoke('delete-provider', type, name)
-
-    if (result.success) {
-      await loadProviders()
-      setError(null)
-    } else {
-      setError(result.error || 'Failed to delete provider')
-    }
+    await window.electron.ipcRenderer.invoke('delete-provider', providerId)
+    await loadProviders()
     setLoading(false)
   }
 
@@ -144,7 +157,6 @@ export function Settings(): React.JSX.Element {
       <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
         <Tabs value={tabValue} onChange={handleTabChange} aria-label="settings tabs">
           <Tab label="Providers" id="tab-0" aria-controls="tabpanel-0" />
-          <Tab label="General" id="tab-1" aria-controls="tabpanel-1" />
         </Tabs>
       </Box>
 
@@ -161,56 +173,71 @@ export function Settings(): React.JSX.Element {
             </Button>
           </Box>
 
-          {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {error}
-            </Alert>
-          )}
-
           <TableContainer component={Paper}>
             <Table>
               <TableHead>
                 <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
                   <TableCell>Type</TableCell>
                   <TableCell>Name</TableCell>
-                  <TableCell>Created</TableCell>
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {providers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} align="center" sx={{ py: 3 }}>
+                    <TableCell colSpan={3} align="center" sx={{ py: 3 }}>
                       No providers found. Click &quot;Add Provider&quot; to create one.
                     </TableCell>
                   </TableRow>
                 ) : (
-                  providers.map((provider) => (
-                    <TableRow key={`${provider.type}:${provider.name}`}>
-                      <TableCell>{provider.type}</TableCell>
-                      <TableCell>{provider.name}</TableCell>
-                      <TableCell>{new Date(provider.created_at).toLocaleString()}</TableCell>
-                      <TableCell align="right">
-                        <IconButton
-                          size="small"
-                          color="error"
-                          onClick={() => handleDeleteProvider(provider.type, provider.name)}
-                          disabled={loading}
-                          title="Delete provider"
-                        >
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                  providers.map((provider) => {
+                    const providerType = providerTypes.find((pt) => pt.id === provider.typeId)
+                    return (
+                      <TableRow key={provider.id}>
+                        <TableCell>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {providerType?.icon ? (
+                              <img
+                                src={providerType.icon}
+                                alt={providerType.name}
+                                style={{ width: 20, height: 20 }}
+                                onError={(e) => {
+                                  // Hide image and show fallback on error
+                                  e.currentTarget.style.display = 'none'
+                                }}
+                              />
+                            ) : null}
+                            <div
+                              style={{
+                                width: 20,
+                                height: 20,
+                                backgroundColor: '#ccc',
+                                borderRadius: '50%',
+                                display: providerType?.icon ? 'none' : 'block'
+                              }}
+                            />
+                            <span>{providerType?.name || provider.typeId}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{provider.name}</TableCell>
+                        <TableCell align="right">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => handleDeleteProvider(provider.id, provider.name)}
+                            disabled={loading}
+                            title="Delete provider"
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })
                 )}
               </TableBody>
             </Table>
           </TableContainer>
-        </TabPanel>
-
-        <TabPanel value={tabValue} index={1}>
-          <Box>General settings coming soon...</Box>
         </TabPanel>
       </Box>
 
@@ -218,20 +245,53 @@ export function Settings(): React.JSX.Element {
       <Dialog open={openDialog} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
         <DialogTitle>Add New Provider</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
-          {error && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {error}
-            </Alert>
-          )}
-          <TextField
+          <FormControl
             fullWidth
-            label="Provider Type"
-            placeholder="e.g., messenger, google message"
-            value={providerType}
-            onChange={(e) => setProviderType(e.target.value)}
             margin="normal"
             disabled={loading}
-          />
+            required
+            error={providerTypeError}
+          >
+            <InputLabel>Provider Type</InputLabel>
+            <Select
+              value={providerTypeId}
+              label="Provider Type"
+              onChange={(e) => setProviderTypeId(e.target.value)}
+            >
+              {providerTypes.map((type) => (
+                <MenuItem key={type.id} value={type.id}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {type.icon ? (
+                      <img
+                        src={type.icon}
+                        alt={type.name}
+                        style={{ width: 20, height: 20 }}
+                        onError={(e) => {
+                          // Hide image and show fallback on error
+                          e.currentTarget.style.display = 'none'
+                        }}
+                      />
+                    ) : null}
+                    <div
+                      style={{
+                        width: 20,
+                        height: 20,
+                        backgroundColor: '#ccc',
+                        borderRadius: '50%',
+                        display: type.icon ? 'none' : 'block'
+                      }}
+                    />
+                    {type.name}
+                  </Box>
+                </MenuItem>
+              ))}
+            </Select>
+            {providerTypeError && (
+              <Box sx={{ color: 'error.main', fontSize: '0.75rem', mt: 0.5, ml: 2 }}>
+                Provider type is required
+              </Box>
+            )}
+          </FormControl>
           <TextField
             fullWidth
             label="Provider Name"
@@ -240,6 +300,9 @@ export function Settings(): React.JSX.Element {
             onChange={(e) => setProviderName(e.target.value)}
             margin="normal"
             disabled={loading}
+            required
+            error={providerNameError}
+            helperText={providerNameError ? 'Provider name is required' : ''}
           />
         </DialogContent>
         <DialogActions>

@@ -1,8 +1,46 @@
-import { app, shell, BrowserWindow, ipcMain, WebContentsView } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, WebContentsView, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import icon from '../../resources/icon.png?asset'
+import icon from '../renderer/public/icon.png?asset'
 import Database from 'better-sqlite3'
+
+class ProviderType {
+  constructor(
+    public id: string,
+    public name: string,
+    public url: string,
+    public icon: string
+  ) {}
+
+  static readonly types: ProviderType[] = [
+    new ProviderType(
+      'FacebookMessenger',
+      'Facebook Messenger',
+      'https://www.messenger.com',
+      'messenger-icon.png'
+    ),
+    new ProviderType(
+      'GoogleMessages',
+      'Google Messages',
+      'https://messages.google.com/web/conversations',
+      'google-messages-icon.png'
+    ),
+    new ProviderType(
+      'WhatsApp',
+      'WhatsApp',
+      'https://web.whatsapp.com',
+      'whatsapp-icon.png'
+    )
+  ]
+
+  static getById(id: string): ProviderType | undefined {
+    return this.types.find((type) => type.id === id)
+  }
+
+  static getAll(): ProviderType[] {
+    return [...this.types]
+  }
+}
 
 let mainWindow: BrowserWindow
 const webContentsViews: Map<string, WebContentsView> = new Map()
@@ -10,59 +48,34 @@ let db: Database.Database
 
 // Initialize SQLite database
 function initDatabase(): void {
-  const dbPath = join(app.getPath('userData'), 'settings3.db')
+  const dbPath = join(app.getPath('userData'), 'settings6.db')
+  console.log('Database path:', dbPath)
   db = new Database(dbPath)
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS providers (
-      id INTEGER PRIMARY KEY,
-      type TEXT NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      typeId TEXT NOT NULL,
       name TEXT NOT NULL,
-      session TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(type, name)
+      UNIQUE(typeId, name)
     )
   `)
 }
 
-// Save session for a provider
-async function saveSession(providerType: string, providerName: string): Promise<void> {
-  const key = `${providerType}:${providerName}`
-  const webContentsView = webContentsViews.get(key)
-  const cookies = await webContentsView!.webContents.session.cookies.get({})
-  const sessionJson = JSON.stringify(cookies)
-
-  db.prepare(
-    `
-    INSERT INTO providers (type, name, session) 
-    VALUES (?, ?, ?)
-    ON CONFLICT(type, name) DO UPDATE SET session = ?
-    `
-  ).run(providerType, providerName, sessionJson, sessionJson)
-}
-
-// Load session for a provider
-async function loadSession(
-  webContentsView: WebContentsView,
-  providerType: string,
-  providerName: string
-): Promise<void> {
-  const row = db
-    .prepare('SELECT session FROM providers WHERE type = ? AND name = ?')
-    .get(providerType, providerName)
-
-  if (row && row.session) {
-    const cookies = JSON.parse(row.session)
-
-    // Set cookies from session
-    for (const cookie of cookies) {
-      // Use the cookie's domain as the URL if available
-      if (cookie.domain) {
-        cookie.url = `https://${cookie.domain.replace(/^\./, '')}`
-      }
-      await webContentsView.webContents.session.cookies.set(cookie)
-    }
-  }
+// Update bounds for all WebContentsViews
+function updateAllViewsBounds(): void {
+  if (!mainWindow) return
+  
+  const bounds = mainWindow.getContentBounds()
+  webContentsViews.forEach((view) => {
+    view.setBounds({
+      x: 250, // Left menu width
+      y: 0,
+      width: bounds.width - 250,
+      height: bounds.height
+    })
+  })
 }
 
 function createWindow(): void {
@@ -72,6 +85,7 @@ function createWindow(): void {
     height: 670,
     show: false,
     autoHideMenuBar: true,
+    title: 'Carrefour',
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -81,6 +95,15 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
+    mainWindow.setTitle('Carrefour')
+  })
+
+  mainWindow.on('resize', () => {
+    updateAllViewsBounds()
+  })
+
+  mainWindow.on('moved', () => {
+    updateAllViewsBounds()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -102,7 +125,7 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('carrefour.app')
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -118,11 +141,33 @@ app.whenReady().then(() => {
   ipcMain.on('ping', () => console.log('pong'))
 
   // IPC handler for creating WebContentsView for a provider
-  ipcMain.handle('create-provider-view', async (_, providerType: string, providerName: string) => {
-    const url = 'https://www.messenger.com'
-    const key = `${providerType}:${providerName}`
+  ipcMain.handle('create-provider-view', async (_, providerId: number, visible: boolean = true) => {
+    const key = providerId.toString()
     if (!webContentsViews.has(key)) {
-      const view = new WebContentsView()
+      // Get provider details from database
+      const provider = db.prepare('SELECT typeId FROM providers WHERE id = ?').get(providerId)
+      if (!provider) {
+        console.error('Provider not found:', providerId)
+        return
+      }
+      
+      // Get provider type and URL
+      const providerType = ProviderType.getById(provider.typeId)
+      if (!providerType) {
+        console.error('Provider type not found:', provider.typeId)
+        return
+      }
+      
+      const url = providerType.url
+      
+      // Create a separate session for this provider
+      const providerSession = session.fromPartition(`persist:provider-${providerId}`)
+      
+      const view = new WebContentsView({
+        webPreferences: {
+          session: providerSession
+        }
+      })
       webContentsViews.set(key, view)
       mainWindow.contentView.addChildView(view)
 
@@ -135,12 +180,27 @@ app.whenReady().then(() => {
         height: bounds.height
       })
 
-      // Load saved session before loading URL
-      await loadSession(view, providerType, providerName)
+      // Load URL - session will be automatically restored by the partition
       view.webContents.loadURL(url)
+      
+      // Set initial visibility
+      view.setVisible(visible)
+    }
+  })
 
-      // Save session periodically (every 10 seconds)
-      setInterval(() => saveSession(providerType, providerName), 10000)
+  // IPC handler for showing a provider view
+  ipcMain.handle('show-provider-view', (_, providerId: number) => {
+    const view = webContentsViews.get(providerId.toString())
+    if (view) {
+      view.setVisible(true)
+    }
+  })
+
+  // IPC handler for hiding a provider view
+  ipcMain.handle('hide-provider-view', (_, providerId: number) => {
+    const view = webContentsViews.get(providerId.toString())
+    if (view) {
+      view.setVisible(false)
     }
   })
 
@@ -155,13 +215,17 @@ app.whenReady().then(() => {
     }
   })
 
+  // IPC handler for getting provider types
+  ipcMain.handle('get-provider-types', () => {
+    return ProviderType.getAll()
+  })
+
   // IPC handler for adding a provider
-  ipcMain.handle('add-provider', (_, providerType: string, providerName: string) => {
+  ipcMain.handle('add-provider', (_, providerTypeId: string, providerName: string) => {
     try {
-      db.prepare('INSERT INTO providers (type, name, session) VALUES (?, ?, ?)').run(
-        providerType,
-        providerName,
-        JSON.stringify([])
+      db.prepare('INSERT INTO providers (typeId, name) VALUES (?, ?)').run(
+        providerTypeId,
+        providerName
       )
       // Notify renderer that providers changed
       if (mainWindow) {
@@ -175,19 +239,15 @@ app.whenReady().then(() => {
   })
 
   // IPC handler for deleting a provider
-  ipcMain.handle('delete-provider', (_, providerType: string, providerName: string) => {
+  ipcMain.handle('delete-provider', (_, providerId: number) => {
     try {
-      const key = `${providerType}:${providerName}`
-      const view = webContentsViews.get(key)
+      const view = webContentsViews.get(providerId.toString())
       if (view) {
         mainWindow.contentView.removeChildView(view)
-        webContentsViews.delete(key)
+        webContentsViews.delete(providerId.toString())
       }
 
-      db.prepare('DELETE FROM providers WHERE type = ? AND name = ?').run(
-        providerType,
-        providerName
-      )
+      db.prepare('DELETE FROM providers WHERE id = ?').run(providerId)
       // Notify renderer that providers changed
       if (mainWindow) {
         mainWindow.webContents.send('providers-updated')
@@ -197,14 +257,6 @@ app.whenReady().then(() => {
       console.error('Failed to delete provider:', error)
       return { success: false, error: (error as Error).message }
     }
-  })
-
-  // Save session on app quit
-  app.on('before-quit', () => {
-    webContentsViews.forEach((_, key) => {
-      const [providerType, providerName] = key.split(':')
-      saveSession(providerType, providerName)
-    })
   })
 
   createWindow()

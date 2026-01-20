@@ -1,5 +1,5 @@
 appId: carrefour.app
-productName: carrefour
+productName: Carrefour
 directories:
   buildResources: build
 files:
