@@ -1,203 +1,24 @@
-import { app, shell, BrowserWindow, ipcMain, WebContentsView, session } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../renderer/public/icon.png?asset'
+import { AppDatabase } from './AppDatabase'
+import { ProviderViewManager } from './ProviderViewManager'
 import Database from 'better-sqlite3'
-import { ProviderType } from './ProviderType'
+import { setupProviderIpcHandlers } from './ProviderIpcHandlers'
 
 let mainWindow: BrowserWindow
-const webContentsViews: Map<string, WebContentsView> = new Map()
-const webviewTitles: Map<string, string> = new Map()
-const unreadFlags: Map<string, boolean> = new Map()
-let currentVisibleProvider: string | null = null
 let db: Database.Database
-
-// Preload all provider webviews in background
-async function preloadAllProviderViews(): Promise<void> {
-  try {
-    const providers = db.prepare('SELECT * FROM providers').all() as Array<{
-      id: number
-      typeId: string
-      name: string
-    }>
-
-    for (const provider of providers) {
-      await createProviderViewIfNotExists(provider.id, false) // Create hidden
-    }
-  } catch (error) {
-    console.error('Failed to preload provider webviews:', error)
-  }
-}
-
-// Create provider view if it doesn't exist (extracted from IPC handler)
-async function createProviderViewIfNotExists(
-  providerId: number,
-  visible: boolean = false
-): Promise<void> {
-  const key = providerId.toString()
-  if (webContentsViews.has(key)) {
-    return // Already exists, don't recreate
-  }
-
-  // Get provider details from database
-  const provider = db.prepare('SELECT typeId FROM providers WHERE id = ?').get(providerId)
-  if (!provider) {
-    console.error('Provider not found:', providerId)
-    return
-  }
-
-  // Get provider type and URL
-  const providerType = ProviderType.getById(provider.typeId)
-  if (!providerType) {
-    console.error('Provider type not found:', provider.typeId)
-    return
-  }
-
-  const url = providerType.url
-
-  // Create a separate session for this provider
-  const providerSession = session.fromPartition(`persist:provider-${providerId}`)
-
-  const view = new WebContentsView({
-    webPreferences: {
-      session: providerSession
-    }
-  })
-  webContentsViews.set(key, view)
-  mainWindow.contentView.addChildView(view)
-  //view.webContents.openDevTools()
-
-  // Set bounds: left menu is 250px, title bar is 40px, content takes rest
-  const bounds = mainWindow.getContentBounds()
-  const titleHeight = 40
-  view.setBounds({
-    x: 250,
-    y: titleHeight,
-    width: bounds.width - 250,
-    height: bounds.height - titleHeight
-  })
-
-  // Listen for title changes and update the stored title
-  view.webContents.on('page-title-updated', (_event, title) => {
-    webviewTitles.set(key, title)
-
-    // If this is the currently visible provider, update the renderer immediately
-    if (currentVisibleProvider === key) {
-      mainWindow.webContents.send('webview-title-updated', title)
-    }
-  })
-
-  // Load URL with custom user agent for better compatibility
-  if (providerType.userAgent) {
-    view.webContents.setUserAgent(providerType.userAgent)
-  }
-
-  // Start loading in background
-  view.webContents.loadURL(url)
-
-  // Set default zoom and handle auto-interactions after page loads
-  view.webContents.once('did-finish-load', () => {
-    view.webContents.setZoomFactor(0.9)
-
-    // Inject provider-specific script if available
-    if (providerType.script) {
-      setTimeout(() => {
-        view.webContents
-          .executeJavaScript(providerType.script)
-          .then(() => {
-            // Script injection completed
-          })
-          .catch((error) => {
-            console.error('Error injecting script for provider', providerId, error)
-          })
-      }, 2000)
-    }
-  })
-
-  // Set initial visibility
-  view.setVisible(visible)
-}
-
-// Worker system to check unread status every second
-function startUnreadStatusWorker(): void {
-  setInterval(async () => {
-    for (const [key, view] of webContentsViews) {
-      if (view && view.webContents) {
-        try {
-          // Execute getUnreadFlag in the webview context
-          const hasUnread = (await view.webContents.executeJavaScript(`
-            (function() {
-              try {
-                if (typeof getUnreadFlag === 'function') {
-                  return getUnreadFlag();
-                }
-                return false;
-              } catch (e) {
-                return false;
-              }
-            })()
-          `)) as boolean
-
-          const oldStatus = unreadFlags.get(key) || false
-
-          if (hasUnread !== oldStatus) {
-            unreadFlags.set(key, hasUnread)
-
-            // Notify renderer about status changes
-            if (mainWindow) {
-              mainWindow.webContents.send('unread-counts-updated', {
-                [key]: hasUnread ? 1 : 0
-              })
-            }
-          }
-        } catch {
-          // Silently ignore errors for providers that aren't loaded yet
-        }
-      }
-    }
-  }, 1000) // Check every second
-}
-
-// Initialize SQLite database
-function initDatabase(): void {
-  const dbPath = join(app.getPath('userData'), 'settings6.db')
-  db = new Database(dbPath)
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS providers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      typeId TEXT NOT NULL,
-      name TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(typeId, name)
-    )
-  `)
-}
-
-// Update bounds for all WebContentsViews
-function updateAllViewsBounds(): void {
-  if (!mainWindow) return
-
-  const bounds = mainWindow.getContentBounds()
-  const titleHeight = 40
-  webContentsViews.forEach((view) => {
-    view.setBounds({
-      x: 250, // Left menu width
-      y: titleHeight,
-      width: bounds.width - 250,
-      height: bounds.height - titleHeight
-    })
-  })
-}
+let providerViewManager: ProviderViewManager
 
 function createWindow(): void {
-  // Create the browser window.
+  // Create the browser window using the new view API for contentView support.
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 670,
     show: false,
     autoHideMenuBar: true,
-    title: 'Carrefour',
+    // title removed
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -212,11 +33,11 @@ function createWindow(): void {
   })
 
   mainWindow.on('resize', () => {
-    updateAllViewsBounds()
+    providerViewManager.updateAllViewsBounds()
   })
 
   mainWindow.on('moved', () => {
-    updateAllViewsBounds()
+    providerViewManager.updateAllViewsBounds()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -236,6 +57,7 @@ function createWindow(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('carrefour.app')
@@ -248,119 +70,24 @@ app.whenReady().then(() => {
   })
 
   // Initialize database
-  initDatabase()
+  const appDatabase = new AppDatabase()
+  db = appDatabase.getInstance()
 
-  // IPC handler for creating WebContentsView for a provider (now just ensures it exists)
-  ipcMain.handle('create-provider-view', async (_, providerId: number, visible: boolean = true) => {
-    await createProviderViewIfNotExists(providerId, visible)
-  })
-
-  // IPC handler for showing a provider view
-  ipcMain.handle('show-provider-view', (_, providerId: number) => {
-    const key = providerId.toString()
-    const view = webContentsViews.get(key)
-    if (view) {
-      view.setVisible(true)
-      currentVisibleProvider = key
-      // Send current title to renderer
-      const currentTitle = webviewTitles.get(key) || 'Loading...'
-      mainWindow.webContents.send('webview-title-updated', currentTitle)
-    }
-  })
-
-  // IPC handler for hiding a provider view
-  ipcMain.handle('hide-provider-view', (_, providerId: number) => {
-    const view = webContentsViews.get(providerId.toString())
-    if (view) {
-      view.setVisible(false)
-      if (currentVisibleProvider === providerId.toString()) {
-        currentVisibleProvider = null
-        // Clear title when hiding current provider
-        mainWindow.webContents.send('webview-title-updated', '')
-      }
-    }
-  })
-
-  // IPC handler for getting all providers
-  ipcMain.handle('get-providers', () => {
-    try {
-      const providers = db.prepare('SELECT * FROM providers').all()
-      return providers
-    } catch (error) {
-      console.error('Failed to fetch providers:', error)
-      return []
-    }
-  })
-
-  // IPC handler for getting provider types
-  ipcMain.handle('get-provider-types', () => {
-    return ProviderType.getAll()
-  })
-
-  // IPC handler for getting unread flags
-  ipcMain.handle('get-unread-counts', () => {
-    const counts: { [key: string]: number } = {}
-    unreadFlags.forEach((hasUnread, providerId) => {
-      counts[providerId] = hasUnread ? 1 : 0
-    })
-    return counts
-  })
-
-  // IPC handler for adding a provider
-  ipcMain.handle('add-provider', async (_, providerTypeId: string, providerName: string) => {
-    try {
-      const result = db
-        .prepare('INSERT INTO providers (typeId, name) VALUES (?, ?)')
-        .run(providerTypeId, providerName)
-
-      // Auto-create webview for the new provider in background
-      const newProviderId = result.lastInsertRowid as number
-      await createProviderViewIfNotExists(newProviderId, false)
-
-      // Notify renderer that providers changed
-      if (mainWindow) {
-        mainWindow.webContents.send('providers-updated')
-      }
-      return { success: true }
-    } catch (error) {
-      console.error('Failed to add provider:', error)
-      return { success: false, error: (error as Error).message }
-    }
-  })
-
-  // IPC handler for deleting a provider
-  ipcMain.handle('delete-provider', (_, providerId: number) => {
-    try {
-      const view = webContentsViews.get(providerId.toString())
-      if (view) {
-        // Hide the view but keep it alive for faster future access
-        view.setVisible(false)
-        // Note: We don't remove the view from webContentsViews to keep it alive
-      }
-
-      db.prepare('DELETE FROM providers WHERE id = ?').run(providerId)
-      // Notify renderer that providers changed
-      if (mainWindow) {
-        mainWindow.webContents.send('providers-updated')
-      }
-      return { success: true }
-    } catch (error) {
-      console.error('Failed to delete provider:', error)
-      return { success: false, error: (error as Error).message }
-    }
-  })
-
+  // Create the main window first
   createWindow()
 
-  // Preload all provider webviews in background after window is ready
-  setTimeout(() => {
-    void preloadAllProviderViews()
-  }, 1000) // Small delay to ensure window is fully loaded
+  // Now that mainWindow is defined, initialize provider view manager
+  providerViewManager = new ProviderViewManager({ mainWindow, db })
 
-  // Start the unread status worker after views are preloaded
-  setTimeout(() => {
-    startUnreadStatusWorker()
-  }, 5000) // Increased delay to ensure scripts are injected
+  // Set up all provider-related IPC handlers
+  setupProviderIpcHandlers(mainWindow, db, providerViewManager)
+
+  // Preload all provider webviews after main window is ready to show
+  mainWindow.on('ready-to-show', () => {
+    void providerViewManager.preloadAllProviderViews()
+    // Start the unread status worker after preloading
+    providerViewManager.startUnreadStatusWorker()
+  })
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
@@ -377,6 +104,3 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
-
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
