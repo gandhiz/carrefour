@@ -30,6 +30,12 @@ function createWindow(): void {
     mainWindow.show()
     mainWindow.maximize()
     mainWindow.setTitle('Carrefour')
+
+    // Preload all provider webviews and start unread status worker
+    if (providerViewManager) {
+      void providerViewManager.preloadAllProviderViews()
+      providerViewManager.startUnreadStatusWorker()
+    }
   })
 
   mainWindow.on('resize', () => {
@@ -82,11 +88,11 @@ app.whenReady().then(() => {
   // Set up all provider-related IPC handlers
   setupProviderIpcHandlers(mainWindow, db, providerViewManager)
 
-  // Preload all provider webviews after main window is ready to show
-  mainWindow.on('ready-to-show', () => {
-    void providerViewManager.preloadAllProviderViews()
-    // Start the unread status worker after preloading
-    providerViewManager.startUnreadStatusWorker()
+  // Add cleanup when main window is closed
+  mainWindow.on('closed', () => {
+    if (providerViewManager) {
+      providerViewManager.cleanup()
+    }
   })
 
   app.on('activate', function () {

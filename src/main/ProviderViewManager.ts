@@ -13,6 +13,7 @@ export class ProviderViewManager {
   private webContentsViews: Map<string, WebContentsView> = new Map()
   private unreadFlags: Map<string, boolean> = new Map()
   private currentVisibleProvider: string | null = null
+  private unreadWorkerInterval: NodeJS.Timeout | null = null
 
   constructor(options: ProviderViewManagerOptions) {
     this.mainWindow = options.mainWindow
@@ -70,6 +71,7 @@ export class ProviderViewManager {
     if (providerType.userAgent) {
       view.webContents.setUserAgent(providerType.userAgent)
     }
+    //view.webContents.openDevTools()
     view.webContents.loadURL(url)
     view.webContents.once('did-finish-load', () => {
       view.webContents.setZoomFactor(0.9)
@@ -98,7 +100,12 @@ export class ProviderViewManager {
   }
 
   startUnreadStatusWorker(): void {
-    setInterval(async () => {
+    // Don't start multiple workers
+    if (this.unreadWorkerInterval) {
+      return
+    }
+
+    this.unreadWorkerInterval = setInterval(async () => {
       for (const [key, view] of this.webContentsViews) {
         if (view && view.webContents) {
           try {
@@ -129,5 +136,24 @@ export class ProviderViewManager {
         }
       }
     }, 1000)
+  }
+
+  stopUnreadStatusWorker(): void {
+    if (this.unreadWorkerInterval) {
+      clearInterval(this.unreadWorkerInterval)
+      this.unreadWorkerInterval = null
+    }
+  }
+
+  cleanup(): void {
+    this.stopUnreadStatusWorker()
+    // Clean up WebContents views
+    this.webContentsViews.forEach((view, key) => {
+      if (view && view.webContents && !view.webContents.isDestroyed()) {
+        view.webContents.removeAllListeners()
+      }
+    })
+    this.webContentsViews.clear()
+    this.unreadFlags.clear()
   }
 }

@@ -1,4 +1,4 @@
-import { Box, Drawer, List, ListItemIcon, ListItemText, ListItemButton } from '@mui/material'
+import { Box, Drawer, List, ListItemIcon, ListItemText, ListItemButton, Badge } from '@mui/material'
 import SettingsIcon from '@mui/icons-material/Settings'
 import MailIcon from '@mui/icons-material/Mail'
 import { useState, useEffect } from 'react'
@@ -13,6 +13,10 @@ interface ProviderType {
   icon: string
 }
 
+interface UnreadCounts {
+  [providerId: string]: number
+}
+
 function App(): React.JSX.Element {
   const [currentPage, setCurrentPage] = useState<'home' | 'settings'>('home')
   const [providers, setProviders] = useState<
@@ -20,6 +24,7 @@ function App(): React.JSX.Element {
   >([])
   const [providerTypes, setProviderTypes] = useState<ProviderType[]>([])
   const [visibleProvider, setVisibleProvider] = useState<number | null>(null)
+  const [unreadCounts, setUnreadCounts] = useState<UnreadCounts>({})
 
   const showProvider = async (providerId: number): Promise<void> => {
     // Hide current provider if any
@@ -99,13 +104,24 @@ function App(): React.JSX.Element {
       void autoLoadProviders()
     }
 
+    // Handle unread count updates
+    const unreadCountsHandler = (_event: unknown, counts: UnreadCounts): void => {
+      setUnreadCounts((prevCounts) => ({ ...prevCounts, ...counts }))
+    }
+
     const removeListenerProvidersUpdated = window.electron.ipcRenderer.on(
       'providers-updated',
       providerUpdateHandler
     )
 
+    const removeListenerUnreadCounts = window.electron.ipcRenderer.on(
+      'unread-counts-updated',
+      unreadCountsHandler
+    )
+
     return () => {
       removeListenerProvidersUpdated()
+      removeListenerUnreadCounts()
     }
   }, [])
 
@@ -151,46 +167,79 @@ function App(): React.JSX.Element {
             providers.map((p) => {
               const providerType = providerTypes.find((pt) => pt.id === p.typeId)
               const isSelected = visibleProvider === p.id
+              const hasUnread = (unreadCounts[p.id.toString()] || 0) > 0
               return (
-                <ListItemButton
+                <Badge
                   key={p.id}
-                  selected={isSelected}
-                  onClick={() => void showProvider(p.id)}
-                  sx={{
-                    backgroundColor: isSelected ? 'rgba(0, 0, 0, 0.04)' : 'transparent',
-                    '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.08)' },
-                    py: 1.5
-                  }}
-                >
-                  <ListItemIcon sx={{ minWidth: 36 }}>
-                    {providerType?.icon ? (
-                      <img
-                        src={providerType.icon}
-                        alt={providerType.name}
-                        style={{ width: 24, height: 24 }}
-                        onError={(e) => {
-                          // Hide image and show fallback on error
-                          e.currentTarget.style.display = 'none'
+                  badgeContent={
+                    hasUnread ? (
+                      <MailIcon
+                        sx={{
+                          fontSize: '1.8rem',
+                          color: 'primary.main',
+                          animation: 'flash 3s infinite',
+                          '@keyframes flash': {
+                            '0%, 50%': { opacity: 1 },
+                            '25%, 75%': { opacity: 0.3 }
+                          }
                         }}
                       />
-                    ) : null}
-                    <div
-                      style={{
-                        width: 24,
-                        height: 24,
-                        backgroundColor: '#ccc',
-                        borderRadius: '50%',
-                        display: providerType?.icon ? 'none' : 'block'
-                      }}
+                    ) : null
+                  }
+                  sx={{
+                    width: '100%',
+                    '& .MuiBadge-badge': {
+                      right: 8,
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      backgroundColor: 'transparent',
+                      color: 'text.primary',
+                      minWidth: 'auto',
+                      height: 'auto',
+                      padding: 0
+                    }
+                  }}
+                >
+                  <ListItemButton
+                    selected={isSelected}
+                    onClick={() => void showProvider(p.id)}
+                    sx={{
+                      backgroundColor: isSelected ? 'rgba(0, 0, 0, 0.04)' : 'transparent',
+                      '&:hover': { backgroundColor: 'rgba(0, 0, 0, 0.08)' },
+                      py: 1.5,
+                      width: '100%'
+                    }}
+                  >
+                    <ListItemIcon sx={{ minWidth: 36 }}>
+                      {providerType?.icon ? (
+                        <img
+                          src={providerType.icon}
+                          alt={providerType.name}
+                          style={{ width: 24, height: 24 }}
+                          onError={(e) => {
+                            // Hide image and show fallback on error
+                            e.currentTarget.style.display = 'none'
+                          }}
+                        />
+                      ) : null}
+                      <div
+                        style={{
+                          width: 24,
+                          height: 24,
+                          backgroundColor: '#ccc',
+                          borderRadius: '50%',
+                          display: providerType?.icon ? 'none' : 'block'
+                        }}
+                      />
+                    </ListItemIcon>
+                    <ListItemText
+                      primary={providerType?.name || p.typeId}
+                      secondary={p.name}
+                      primaryTypographyProps={{ fontSize: '0.9rem' }}
+                      secondaryTypographyProps={{ fontSize: '0.8rem' }}
                     />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={providerType?.name || p.typeId}
-                    secondary={p.name}
-                    primaryTypographyProps={{ fontSize: '0.9rem' }}
-                    secondaryTypographyProps={{ fontSize: '0.8rem' }}
-                  />
-                </ListItemButton>
+                  </ListItemButton>
+                </Badge>
               )
             })
           )}

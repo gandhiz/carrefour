@@ -27,7 +27,8 @@ export class ProviderType {
 
         // Function to detect if there are unread messages for Messenger
         function getUnreadFlag() {
-          return !!document.querySelector("#left-sidebar-button-chats > div > div > div > div > div > div > div > div > svg");
+          var unread = !!document.querySelector("#left-sidebar-button-chats > div > div > div > div > div > div > div > div > svg");
+          return unread;
         }
       `
     ),
@@ -39,7 +40,8 @@ export class ProviderType {
       `
         // Function to check if there are unread messages for Google Messages
         function getUnreadFlag() {
-          return false;
+          var unread = !!document.querySelector('a[data-e2e-is-unread="true"]');
+          return unread;
         }
       `
     ),
@@ -51,7 +53,8 @@ export class ProviderType {
       `
         // Function to check if there are unread messages for WhatsApp
         function getUnreadFlag() {
-          return false;
+          var unread = !!document.querySelector("#app > div > div > div > div > header > div > div:nth-child(1) > div > div > span > button > div > div > div > span > span");
+          return unread;
         }
       `,
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
